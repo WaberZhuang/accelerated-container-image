@@ -201,13 +201,12 @@ type PluginConfig struct {
 }
 
 type snapshotter struct {
-	root           string
-	config         SnapshotterConfig
-	ms             *storage.MetaStore
-	metacopyOption string
-	indexOff       bool
-	experimental   bool
-	locker         *locker.Locker
+	root         string
+	config       SnapshotterConfig
+	ms           *storage.MetaStore
+	indexOff     bool
+	experimental bool
+	locker       *locker.Locker
 }
 
 // NewSnapshotter returns a Snapshotter which uses block device based on overlayFS.
@@ -232,11 +231,6 @@ func NewSnapshotter(pconfig *PluginConfig, opts ...Opt) (snapshots.Snapshotter, 
 		return nil, err
 	}
 
-	metacopyOption := ""
-	if _, err := os.Stat("/sys/module/overlay/parameters/metacopy"); err == nil {
-		metacopyOption = "metacopy=on"
-	}
-
 	// figure out whether "index=off" option is recognized by the kernel
 	var indexOff bool
 	if _, err = os.Stat("/sys/module/overlay/parameters/index"); err == nil {
@@ -244,13 +238,12 @@ func NewSnapshotter(pconfig *PluginConfig, opts ...Opt) (snapshots.Snapshotter, 
 	}
 
 	return &snapshotter{
-		root:           pconfig.Root,
-		ms:             ms,
-		indexOff:       indexOff,
-		config:         config,
-		metacopyOption: metacopyOption,
-		locker:         locker.New(),
-		experimental:   pconfig.Experimental,
+		root:         pconfig.Root,
+		ms:           ms,
+		indexOff:     indexOff,
+		config:       config,
+		locker:       locker.New(),
+		experimental: pconfig.Experimental,
 	}, nil
 }
 
@@ -460,7 +453,7 @@ func (o *snapshotter) createMountPoint(ctx context.Context, kind snapshots.Kind,
 	}
 
 	stype := storageTypeNormal
-	writeType = o.getWritableType(ctx, parentID, info)
+	writeType := o.getWritableType(ctx, parentID, info)
 	// If Preparing for rootfs, find metadata from its parent (top layer), launch and mount backstore device.
 	if _, ok := info.Labels[labelKeyTargetSnapshotRef]; !ok {
 		if writeType != roDir {
@@ -620,7 +613,7 @@ func (o *snapshotter) Mounts(ctx context.Context, key string) (res []mount.Mount
 			return nil, err
 		}
 		if isDadi {
-			writeType = o.getWritableType(ctx, s.ID, info)
+			writeType := o.getWritableType(ctx, s.ID, info)
 			if writeType != roDir {
 				return o.basedOnBlockDeviceMount(ctx, s, writeType)
 			}
@@ -1117,13 +1110,7 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 		return "", snapshots.Info{}, errors.Wrap(err, "failed to rename")
 	}
 	td = ""
-	if data, ok := info.Labels["PodSandboxMetadata"]; ok {
-		if err := ioutil.WriteFile(filepath.Join(path, SandBoxMetaFile), []byte(data), 0644); err != nil {
-			log.G(ctx).Errorf("LSMD ERROR write sandbox meta failed. path: %s, err: %s", filepath.Join(path, SandBoxMetaFile), err.Error())
-		}
-	} else {
-		log.G(ctx).Warnf("sandbox meta not found.")
-	}
+
 	img, ok := info.Labels[labelKeyCriImageRef]
 	if !ok {
 		img, ok = info.Labels[labelKeyImageRef]
@@ -1131,7 +1118,7 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 	if ok {
 		log.G(ctx).Infof("found imageRef: %s", img)
 		if err := ioutil.WriteFile(filepath.Join(path, ImageRefFile), []byte(img), 0644); err != nil {
-			log.G(ctx).Errorf("LSMD ERROR write imageRef '%s'. path: %s, err: %s", img, filepath.Join(path, SandBoxMetaFile), err.Error())
+			log.G(ctx).Errorf("LSMD ERROR write imageRef '%s'. path: %s, err: %s", img, filepath.Join(path, ImageRefFile), err.Error())
 		}
 	} else {
 		log.G(ctx).Warnf("imageRef meta not found.")

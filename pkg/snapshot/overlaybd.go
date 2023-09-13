@@ -36,10 +36,6 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-var (
-	writeType int
-)
-
 const (
 	zdfsMetaDir         = "zdfsmeta"               //meta dir that contains the dadi image meta files
 	iNewFormat          = ".aaaaaaaaaaaaaaaa.lsmt" //characteristic file of dadi image
@@ -50,12 +46,11 @@ const (
 	zdfsTrace           = ".trace"
 
 	overlaybdBaseLayer = "/opt/overlaybd/baselayers/.commit"
-	ImageRefFile       = "image_ref"        // save cri.imageRef as file for old dadi format
-	SandBoxMetaFile    = "pod_sandbox_meta" // for SAE
+	ImageRefFile       = "image_ref" // save cri.imageRef as file for old dadi format
 )
 
-//If error is nil, the existence is valid.
-//If error is not nil, the existence is invalid. Can't make sure if path exists.
+// If error is nil, the existence is valid.
+// If error is not nil, the existence is invalid. Can't make sure if path exists.
 func pathExists(path string) (bool, error) {
 	_, err := os.Stat(path)
 	if err == nil {
@@ -231,7 +226,6 @@ func loadBackingStoreConfig(dir string) (*OverlayBDBSConfig, error) {
 // ConstructOverlayBDSpec generates the config spec for overlaybd target.
 func ConstructOverlayBDSpec(dir, parent, repo, digest string, info snapshots.Info, size uint64, recordTracePath string) error {
 	configJSON := OverlayBDBSConfig{
-		ImageRef:   info.Labels[labelKeyCriImageRef],
 		Lowers:     []OverlayBDBSConfigLower{},
 		ResultFile: overlaybdInitDebuglogPath(dir),
 	}
@@ -274,9 +268,9 @@ func updateSpec(dir, recordTracePath string) error {
 	return atomicWriteOverlaybdTargetConfig(dir, bsConfig)
 }
 
-//The idDir must be clean here according to process of createSnapshot(...).
-//Used to create necessary dirs and top files for lsmd.
-//idDir is just snDir that is only used by the snapshot.
+// The idDir must be clean here according to process of createSnapshot(...).
+// Used to create necessary dirs and top files for lsmd.
+// idDir is just snDir that is only used by the snapshot.
 func PrepareMeta(idDir string, lowers []string, info snapshots.Info, recordTracePath string) error {
 
 	makeConfig := func(dir string, parent string) error {
