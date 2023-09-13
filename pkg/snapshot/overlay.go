@@ -112,6 +112,14 @@ const (
 
 	// labelKeyCriImageRef is thr image-ref from cri
 	labelKeyCriImageRef = "containerd.io/snapshot/cri.image-ref"
+
+	// labelKeyTurboOCIDigest is the index annotation key for image layer digest
+	labelKeyFastOCIDigest  = "containerd.io/snapshot/overlaybd/fastoci/target-digest" // legacy
+	labelKeyTurboOCIDigest = "containerd.io/snapshot/overlaybd/turbo-oci/target-digest"
+
+	// labelKeyTurboOCIMediaType is the index annotation key for image layer media type
+	labelKeyFastOCIMediaType  = "containerd.io/snapshot/overlaybd/fastoci/target-media-type" // legacy
+	labelKeyTurboOCIMediaType = "containerd.io/snapshot/overlaybd/turbo-oci/target-media-type"
 )
 
 // interface
@@ -346,6 +354,17 @@ func (o *snapshotter) getWritableType(ctx context.Context, id string, info snaps
 	return rwMode()
 }
 
+func (o *snapshotter) checkTurboOCI(labels map[string]string) (bool, string, string) {
+	if st1, ok1 := labels[labelKeyTurboOCIDigest]; ok1 {
+		return true, st1, labels[labelKeyTurboOCIMediaType]
+	}
+
+	if st2, ok2 := labels[labelKeyFastOCIDigest]; ok2 {
+		return true, st2, labels[labelKeyFastOCIMediaType]
+	}
+	return false, "", ""
+}
+
 func (o *snapshotter) createMountPoint(ctx context.Context, kind snapshots.Kind, key string, parent string, opts ...snapshots.Opt) (_ []mount.Mount, retErr error) {
 
 	ctx, t, err := o.ms.TransactionContext(ctx, true)
@@ -423,6 +442,13 @@ func (o *snapshotter) createMountPoint(ctx context.Context, kind snapshots.Kind,
 		log.G(ctx).Debugf("Prepare (storageType: %d)", stype)
 		if err != nil {
 			return nil, err
+		}
+		if isTurboOCI, digest, _ := o.checkTurboOCI(info.Labels); isTurboOCI {
+			log.G(ctx).Infof("%s is turboOCI.v1 layer: %s", s.ID, digest)
+			if err := o.constructOverlayBDSpec(ctx, key, false); err != nil {
+				return nil, err
+			}
+			stype = storageTypeNormal
 		}
 		if stype == storageTypeRemoteBlock {
 			if _, _, err = o.commit(ctx, targetRef, key, opts...); err != nil {
@@ -738,7 +764,7 @@ func HasCommitLayerFlag(dir string) bool {
 func (o *snapshotter) CommitMark(ctx context.Context, id, parent string) error {
 	logrus.Infof("MardDadi id=%s, parent=%s", id, parent)
 	if ok, _ := IsZdfsLayer(o.getSnDir(id)); ok {
-		return AddCommitLayerFlag(o.getSnDir(id))
+		return nil
 	}
 	if parent != "" {
 		parentID, _, _, err := storage.GetInfo(ctx, parent)
@@ -758,10 +784,7 @@ func (o *snapshotter) CommitMark(ctx context.Context, id, parent string) error {
 		if err := ioutil.WriteFile(filepath.Join(o.getSnDir(id), "block", "config.v1.json"), data, 0666); err != nil {
 			return err
 		}
-
-		if ok, _ := IsZdfsLayer(parentDir); HasCommitLayerFlag(parentDir) || ok {
-			return AddCommitLayerFlag(o.getSnDir(id))
-		}
+		return AddCommitLayerFlag(o.getSnDir(id))
 	}
 	return nil
 }
@@ -1215,6 +1238,14 @@ func (o *snapshotter) overlaybdWritableDataPath(id string) string {
 
 func (o *snapshotter) overlaybdBackstoreMarkFile(id string) string {
 	return filepath.Join(o.root, "snapshots", id, "block", "backstore_mark")
+}
+
+func (o *snapshotter) turboOCIFsMeta(id string) string {
+	return filepath.Join(o.root, "snapshots", id, "fs", "ext4.fs.meta")
+}
+
+func (o *snapshotter) turboOCIGzipIdx(id string) string {
+	return filepath.Join(o.root, "snapshots", id, "fs", "gzip.meta")
 }
 
 // Close closes the snapshotter
