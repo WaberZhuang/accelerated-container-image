@@ -1,0 +1,3 @@
+overlaybd-snapshotter:
+  pkgpara:
+    DOCKER: 1
