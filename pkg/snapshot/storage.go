@@ -36,7 +36,6 @@ import (
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/mount"
 	"github.com/containerd/containerd/reference"
-	"github.com/containerd/containerd/snapshots"
 	"github.com/containerd/containerd/snapshots/storage"
 	"github.com/containerd/continuity"
 	"github.com/moby/sys/mountinfo"
@@ -180,35 +179,35 @@ func (o *snapshotter) parseAndCheckMounted(ctx context.Context, r io.Reader, dir
 // unmountAndDetachBlockDevice
 func (o *snapshotter) unmountAndDetachBlockDevice(ctx context.Context, snID string, snKey string) (err error) {
 
-	var info snapshots.Info
-	if snKey != "" {
-		_, info, _, err = storage.GetInfo(ctx, snKey)
-		if err != nil {
-			return errors.Wrapf(err, "can't get snapshot info.")
-		}
-	}
-	writeType := o.getWritableType(ctx, snID, info)
+	// var info snapshots.Info
+	// if snKey != "" {
+	// _, info, _, err = storage.GetInfo(ctx, snKey)
+	// if err != nil {
+	// 	return errors.Wrapf(err, "can't get snapshot info.")
+	// }
+	// }
+	// writeType := o.getWritableType(ctx, snID, info)
 	overlaybd, err := ioutil.ReadFile(o.overlaybdBackstoreMarkFile(snID))
 	if err != nil {
 		log.G(ctx).Errorf("read device name failed: %s, err: %v", o.overlaybdBackstoreMarkFile(snID), err)
 	}
 
-	if writeType != rwDev {
-		mountPoint := o.overlaybdMountpoint(snID)
-		log.G(ctx).Debugf("check overlaybd mountpoint is in use: %s", mountPoint)
-		busy, err := o.checkOverlaybdInUse(ctx, mountPoint)
-		if err != nil {
-			return err
-		}
-		if busy {
-			log.G(ctx).Infof("device still in use.")
-			return nil
-		}
-		log.G(ctx).Infof("umount device, mountpoint: %s", mountPoint)
-		if err := mount.UnmountAll(mountPoint, 0); err != nil {
-			return errors.Wrapf(err, "failed to umount %s", mountPoint)
-		}
+	// if writeType != rwDev {
+	mountPoint := o.overlaybdMountpoint(snID)
+	log.G(ctx).Debugf("check overlaybd mountpoint is in use: %s", mountPoint)
+	busy, err := o.checkOverlaybdInUse(ctx, mountPoint)
+	if err != nil {
+		return err
 	}
+	if busy {
+		log.G(ctx).Infof("device still in use.")
+		return nil
+	}
+	log.G(ctx).Infof("umount device, mountpoint: %s", mountPoint)
+	if err := mount.UnmountAll(mountPoint, 0); err != nil {
+		return errors.Wrapf(err, "failed to umount %s", mountPoint)
+	}
+	// }
 
 	loopDevID := o.overlaybdLoopbackDeviceID(snID)
 	lunPath := o.overlaybdLoopbackDeviceLunPath(loopDevID)
