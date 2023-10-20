@@ -692,7 +692,7 @@ func (o *snapshotter) Commit(ctx context.Context, name, key string, opts ...snap
 	}
 
 	if _, err := o.loadBackingStoreConfig(id); err == nil {
-		log.G(ctx).Debugf("[%s] is an overlaybd image.", id)
+		log.G(ctx).Infof("[%s] is an overlaybd image.", id)
 		// if writable, should commit the data and make it immutable.
 		if _, writableBD := oinfo.Labels[LabelSupportReadWriteMode]; writableBD {
 
