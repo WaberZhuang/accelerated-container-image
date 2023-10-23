@@ -36,19 +36,16 @@ This package includes overlaybd snapshotter runtime binary.
 BASE=$OLDPWD/bin
 ROOT_SRC=${RPM_BUILD_ROOT}%{_prefix}/overlaybd/snapshotter
 ROOT_ETC=${RPM_BUILD_ROOT}/etc/overlaybd-snapshotter
-SYSTEMD=${RPM_BUILD_ROOT}/usr/lib/systemd/system/
 
 # install overlaybd-snapshotter
 rm -fr $RPM_BUILD_ROOT
 mkdir -p ${ROOT_SRC}
 cp ${BASE}/overlaybd-snapshotter ${ROOT_SRC}/
-cp -f ${BASE}/ctr ${ROOT_SRC}/
+cp ${BASE}/ctr ${ROOT_SRC}/
+cp ${BASE}/overlaybd-snapshotter.service ${ROOT_SRC}/
 
 mkdir -p ${ROOT_ETC}
 cp ${BASE}/config.json ${ROOT_ETC}/
-
-mkdir -p ${SYSTEMD}
-cp ${BASE}/overlaybd-snapshotter.service ${SYSTEMD}/
 
 # package infomation
 %files
@@ -65,7 +62,6 @@ cp ${BASE}/overlaybd-snapshotter.service ${SYSTEMD}/
 # %config(noreplace) %{_prefix}/etc/sample.conf
 ## indicate the dir for crontab
 # %attr(644,root,root)  %{_crondir}/*
-%config /usr/lib/systemd/system/overlaybd-snapshotter.service
 %config /etc/overlaybd-snapshotter/config.json
 
 %pre
