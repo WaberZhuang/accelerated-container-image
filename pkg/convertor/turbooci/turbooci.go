@@ -478,16 +478,17 @@ func (c *convertor) prepareManifest() {
 		layer.S("annotations").Set(targetMediaType, label.TurboOCIMediaType)
 		layer.S("annotations").Set(version.TurboOCIVersionNumber, label.OverlayBDVersion)
 
-		c.configJSON.S("rootfs", "diff_ids").SetIndex(c.turboOCIUncompressed[idx], idx)
+		c.configJSON.S("rootfs", "diff_ids").SetIndex(c.turboOCIUncompressed[idx].Digest, idx)
 	}
-}
-
-func (c *convertor) pushManifest(ctx context.Context) (ocispec.Descriptor, error) {
 	// do not modify time for a reproducible config
 	// c.configJSON.Set(time.Now(), "created")
 	configDesc := internal.FromBytes(c.configJSON.Bytes())
 	c.manifestJSON.S("config").Set(configDesc.Digest, "digest")
 	c.manifestJSON.S("config").Set(configDesc.Size, "size")
+}
+
+func (c *convertor) pushManifest(ctx context.Context) (ocispec.Descriptor, error) {
+	configDesc := internal.FromBytes(c.configJSON.Bytes())
 
 	if c.ociFormat || c.manifest.MediaType == ocispec.MediaTypeImageManifest {
 		internal.ConvertManifest(c.manifestJSON, internal.OCIFormat)
@@ -510,7 +511,7 @@ func (c *convertor) pushManifest(ctx context.Context) (ocispec.Descriptor, error
 
 var (
 	// referrer always use this config
-	defaultConfigContent    = []byte("{}")
+	// defaultConfigContent    = []byte("{}")
 	defaultConfigDescriptor = ocispec.Descriptor{
 		MediaType: ArtifactMediaType,
 		Digest:    ocispec.DescriptorEmptyJSON.Digest,
@@ -525,9 +526,9 @@ func (c *convertor) pushReferrer(ctx context.Context) error {
 		return fmt.Errorf("failed to clone referrer JSON: %w", err)
 	}
 	// config.mediaType will be used as ArtifactType
-	referJSON.Object("config")
-	referJSON.S("config").Set(defaultConfigDescriptor.Digest, "digest")
-	referJSON.S("config").Set(defaultConfigDescriptor.Size, "size")
+	// referJSON.Object("config")
+	// referJSON.S("config").Set(defaultConfigDescriptor.Digest, "digest")
+	// referJSON.S("config").Set(defaultConfigDescriptor.Size, "size")
 	referJSON.S("config").Set(defaultConfigDescriptor.MediaType, "mediaType")
 
 	// referrers must in OCI format
@@ -542,12 +543,13 @@ func (c *convertor) pushReferrer(ctx context.Context) error {
 	referDesc := internal.FromBytes(referJSON.Bytes())
 	referDesc.MediaType = referJSON.S("mediaType").Data().(string)
 
-	if err := c.store.Push(ctx, defaultConfigDescriptor, bytes.NewReader(defaultConfigContent)); err != nil {
+	configDesc := internal.FromBytes(c.configJSON.Bytes())
+	if err := c.store.Push(ctx, configDesc, bytes.NewReader(c.configJSON.Bytes())); err != nil {
 		return fmt.Errorf("failed to push config (placeholder): %w", err)
 	}
 	log.G(ctx).WithFields(log.Fields{
-		"digest": defaultConfigDescriptor.Digest,
-		"size":   defaultConfigDescriptor.Size,
+		"digest": configDesc.Digest,
+		"size":   configDesc.Size,
 	}).Infof("config pushed")
 
 	if err := c.store.Push(ctx, referDesc, bytes.NewReader(referJSON.Bytes())); err != nil {
