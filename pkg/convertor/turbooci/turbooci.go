@@ -509,27 +509,13 @@ func (c *convertor) pushManifest(ctx context.Context) (ocispec.Descriptor, error
 	return manifestDesc, nil
 }
 
-var (
-	// referrer always use this config
-	// defaultConfigContent    = []byte("{}")
-	defaultConfigDescriptor = ocispec.Descriptor{
-		MediaType: ArtifactMediaType,
-		Digest:    ocispec.DescriptorEmptyJSON.Digest,
-		Size:      ocispec.DescriptorEmptyJSON.Size,
-	}
-)
-
 func (c *convertor) pushReferrer(ctx context.Context) error {
 	// deep clone
 	referJSON, err := internal.ParseJSON(c.manifestJSON, nil)
 	if err != nil {
 		return fmt.Errorf("failed to clone referrer JSON: %w", err)
 	}
-	// config.mediaType will be used as ArtifactType
-	// referJSON.Object("config")
-	// referJSON.S("config").Set(defaultConfigDescriptor.Digest, "digest")
-	// referJSON.S("config").Set(defaultConfigDescriptor.Size, "size")
-	referJSON.S("config").Set(defaultConfigDescriptor.MediaType, "mediaType")
+	referJSON.S("config").Set(ArtifactMediaType, "mediaType")
 
 	// referrers must in OCI format
 	internal.ConvertManifest(referJSON, internal.OCIFormat)
@@ -668,7 +654,7 @@ func (c *convertor) cmdCommit(ctx context.Context, idx int) error {
 		c.pathWritableIndex(idx),
 		c.pathLayerFSMeta(idx),
 		"-z", "--turboOCI",
-		"--uuid", internal.ChainIDtoUUID(c.chainIDs[idx]),
+		//"--uuid", internal.ChainIDtoUUID(c.chainIDs[idx]),
 	).CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to overlaybd-commit: %w, output: %s", err, out)
 	}
