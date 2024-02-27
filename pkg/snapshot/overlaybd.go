@@ -20,13 +20,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	sn "github.com/containerd/accelerated-container-image/pkg/types"
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/reference"
 	"github.com/containerd/containerd/snapshots"
@@ -101,7 +101,7 @@ func overlaybdInitDebuglogPath(dir string) string {
 	return filepath.Join(dir, zdfsMetaDir, "init-debug.log")
 }
 
-func atomicWriteOverlaybdTargetConfig(dir string, configJSON *OverlayBDBSConfig) error {
+func atomicWriteOverlaybdTargetConfig(dir string, configJSON *sn.OverlayBDBSConfig) error {
 	data, err := json.Marshal(configJSON)
 	if err != nil {
 		return errors.Wrapf(err, "failed to marshal %+v configJSON into JSON", configJSON)
@@ -115,7 +115,7 @@ func atomicWriteOverlaybdTargetConfig(dir string, configJSON *OverlayBDBSConfig)
 }
 
 func getTrimStringFromFile(filePath string) (string, error) {
-	data, err := ioutil.ReadFile(filePath)
+	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return "", err
 	}
@@ -208,14 +208,14 @@ func GetBlobSize(dir string) (uint64, error) {
 }
 
 // loadBackingStoreConfig loads overlaybd target config.
-func loadBackingStoreConfig(dir string) (*OverlayBDBSConfig, error) {
+func loadBackingStoreConfig(dir string) (*sn.OverlayBDBSConfig, error) {
 	confPath := overlaybdConfPath(dir)
-	data, err := ioutil.ReadFile(confPath)
+	data, err := os.ReadFile(confPath)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to read config(path=%s) of snapshot %s", confPath, dir)
 	}
 
-	var configJSON OverlayBDBSConfig
+	var configJSON sn.OverlayBDBSConfig
 	if err := json.Unmarshal(data, &configJSON); err != nil {
 		return nil, errors.Wrapf(err, "failed to unmarshal data(%s)", string(data))
 	}
@@ -225,13 +225,13 @@ func loadBackingStoreConfig(dir string) (*OverlayBDBSConfig, error) {
 
 // ConstructOverlayBDSpec generates the config spec for overlaybd target.
 func ConstructOverlayBDSpec(dir, parent, repo, digest string, info snapshots.Info, size uint64, recordTracePath string) error {
-	configJSON := OverlayBDBSConfig{
-		Lowers:     []OverlayBDBSConfigLower{},
+	configJSON := sn.OverlayBDBSConfig{
+		Lowers:     []sn.OverlayBDBSConfigLower{},
 		ResultFile: overlaybdInitDebuglogPath(dir),
 	}
 	configJSON.RepoBlobURL = repo
 	if parent == "" {
-		configJSON.Lowers = append(configJSON.Lowers, OverlayBDBSConfigLower{
+		configJSON.Lowers = append(configJSON.Lowers, sn.OverlayBDBSConfigLower{
 			File: overlaybdBaseLayer,
 		})
 	} else {
@@ -246,7 +246,7 @@ func ConstructOverlayBDSpec(dir, parent, repo, digest string, info snapshots.Inf
 	}
 
 	configJSON.RecordTracePath = recordTracePath
-	configJSON.Lowers = append(configJSON.Lowers, OverlayBDBSConfigLower{
+	configJSON.Lowers = append(configJSON.Lowers, sn.OverlayBDBSConfigLower{
 		Digest: digest,
 		Size:   int64(size),
 		Dir:    path.Join(dir, "block"),
@@ -284,9 +284,9 @@ func PrepareMeta(idDir string, lowers []string, info snapshots.Info, recordTrace
 
 		refPath := path.Join(dir, ImageRefFile)
 		if b, _ := pathExists(refPath); b {
-			img, _ := ioutil.ReadFile(refPath)
+			img, _ := os.ReadFile(refPath)
 			imageRef := string(img)
-			logrus.Infof("read imageRef from labelKeyCriImageRef: %s", imageRef)
+			logrus.Infof("read imageRef from label.CRIImageRef: %s", imageRef)
 			repo, _ = constructImageBlobURL(imageRef)
 		}
 		logrus.Infof("construct repoBlobUrl: %s", repo)
@@ -329,9 +329,9 @@ func PrepareMeta(idDir string, lowers []string, info snapshots.Info, recordTrace
 		}
 
 		//2.create tmpDir in dir
-		tmpDir, err := ioutil.TempDir(dir, "temp_for_prepare_dadimeta")
+		tmpDir, err := os.MkdirTemp(dir, "temp_for_prepare_dadimeta")
 		if err != nil {
-			logrus.Errorf("LSMD ERROR ioutil.TempDir(%s,.) err:%s", dir, err)
+			logrus.Errorf("LSMD ERROR os.MkdirTemp(%s,.) err:%s", dir, err)
 			return err
 		}
 
@@ -378,13 +378,13 @@ func copyPulledZdfsMetaFiles(srcDir, dstDir string) error {
 		if _, err := os.Stat(srcPath); err != nil && os.IsNotExist(err) {
 			continue
 		}
-		data, err := ioutil.ReadFile(srcPath)
+		data, err := os.ReadFile(srcPath)
 		if err != nil {
-			logrus.Errorf("LSMD ERROR ioutil.ReadFile(srcDir:%s, name:%s) dstDir:%s, err:%s", srcDir, name, dstDir, err)
+			logrus.Errorf("LSMD ERROR os.ReadFile(srcDir:%s, name:%s) dstDir:%s, err:%s", srcDir, name, dstDir, err)
 			return err
 		}
-		if err := ioutil.WriteFile(path.Join(dstDir, name), data, 0666); err != nil {
-			logrus.Errorf("LSMD ERROR ioutil.WriteFile(path.Join(dstDir:%s, name:%s) srcDir:%s err:%s", dstDir, name, srcDir, err)
+		if err := os.WriteFile(path.Join(dstDir, name), data, 0666); err != nil {
+			logrus.Errorf("LSMD ERROR os.WriteFile(path.Join(dstDir:%s, name:%s) srcDir:%s err:%s", dstDir, name, srcDir, err)
 			return err
 		}
 	}

@@ -19,7 +19,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"io/ioutil"
 	"net"
 	"os"
 	"os/signal"
@@ -45,7 +44,7 @@ func parseConfig(fpath string) error {
 	pconfig = &overlaybd.PluginConfig{
 		Experimental: false,
 	}
-	data, err := ioutil.ReadFile(fpath)
+	data, err := os.ReadFile(fpath)
 	if err != nil {
 		return errors.Wrapf(err, "failed to read plugin config from %s", fpath)
 	}

@@ -27,7 +27,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"strings"
 	"time"
@@ -515,7 +514,6 @@ func (c *overlaybdConvertor) sentToRemote(ctx context.Context, desc ocispec.Desc
 
 // convertLayers applys image layers on overlaybd with specified filesystem and
 // exports the layers based on zfile.
-//
 func (c *overlaybdConvertor) convertLayers(ctx context.Context, srcDescs []ocispec.Descriptor, srcDiffIDs []digest.Digest, fsType string) ([]layer, error) {
 	var (
 		lastParentID string = ""
@@ -689,7 +687,7 @@ func (c *overlaybdConvertor) applyOCIV1LayerInZfile(
 	}
 
 	// Read any trailing data
-	if _, err := io.Copy(ioutil.Discard, rc); err != nil {
+	if _, err := io.Copy(io.Discard, rc); err != nil {
 		return emptyString, err
 	}
 

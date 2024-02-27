@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/containerd/accelerated-container-image/pkg/label"
 	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/reference"
 	"github.com/containerd/containerd/snapshots"
@@ -40,7 +41,7 @@ const (
 	umountSleepTime   = 200 * time.Millisecond //sleep time after each umount operation
 )
 
-//From CRI plugin
+// From CRI plugin
 const (
 	//CriImageRefLabel  is a label which contains image reference passed from CRI plugin.
 	CriImageRefLabel = "containerd.io/snapshot/cri.image-ref"
@@ -50,7 +51,7 @@ const (
 	CriImageLayersLabel = "containerd.io/snapshot/cri.image-layers"
 )
 
-//From ctr
+// From ctr
 const (
 	// targetRefLabel is a label which contains image reference.
 	StargzRefLabel = "containerd.io/snapshot/remote/stargz.reference"
@@ -121,7 +122,7 @@ func (o *snapshotter) checkAndPrepareStargzForPullPhrase(ctx context.Context, ke
 		return nil
 	}
 	isStargzLayer := func() bool {
-		_, ok1 := infoLabels[labelKeyTargetSnapshotRef]
+		_, ok1 := infoLabels[label.TargetSnapshotRef]
 		_, ok2 := infoLabels[TOCJSONDigestAnnotation]
 		_, err1 := getLayerDigest(infoLabels)
 		_, err2 := getImageRef(infoLabels)
@@ -153,7 +154,7 @@ func (o *snapshotter) checkAndPrepareStargzForPullPhrase(ctx context.Context, ke
 	return true, err
 }
 
-//lowers 是snDir不是fs dir
+// lowers 是snDir不是fs dir
 func (o *snapshotter) prepareStargzForRunPhrase(lowers []string) error {
 	logrus.Infof("Enter prepareStargzForRunPhrase")
 	defer logrus.Infof("Leave prepareStargzForRunPhrase")
@@ -311,7 +312,7 @@ func stargzBinaryExists() bool {
 	return true
 }
 
-//launch fuse daemon
+// launch fuse daemon
 func launchFuseDaemonAndMount(mountpoint string) error {
 	formCmd := func(layerMetaPath string) string {
 		ret := fmt.Sprintf("%s --layer_meta_path=%s &", stargzBinary, layerMetaPath)
@@ -422,7 +423,7 @@ func constructAndSaveStargzLayerInfo(mountpoint string, labels map[string]string
 }
 
 func getImageRef(labels map[string]string) (string, error) {
-	keys := []string{CriImageRefLabel, labelKeyImageRef}
+	keys := []string{CriImageRefLabel, label.TargetImageRef}
 	if ret, ok := getValueFromLabels(labels, keys); ok {
 		return ret, nil
 	}

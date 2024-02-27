@@ -19,16 +19,18 @@ package snapshot
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/docker/docker/pkg/locker"
 	"github.com/sirupsen/logrus"
 
+	"github.com/containerd/accelerated-container-image/pkg/label"
+	"github.com/containerd/accelerated-container-image/pkg/metrics"
 	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/mount"
@@ -57,69 +59,21 @@ const (
 	// storageTypeRemoteBlock means that there is no unpacked layer data.
 	// But there are labels to mark data that will be pulling on demand.
 	storageTypeRemoteBlock
+
+	// storageTypeLocalLayer means that the unpacked layer data is in
+	// a tar file, which needs to generate overlaybd-turboOCI meta before
+	// create an overlaybd device
+	storageTypeLocalLayer
 )
 
 // support on-demand loading by the labels
 const (
-	// labelKeyTargetSnapshotRef is the interface to know that Prepare
-	// action is to pull image, not for container Writable snapshot.
-	//
-	// NOTE: Only available in >= containerd 1.4.0 and containerd.Pull
-	// with Unpack option.
-	//
-	// FIXME(fuweid): With containerd design, we don't know that what purpose
-	// snapshotter.Prepare does for. For unpacked image, prepare is for
-	// container's rootfs. For pulling image, the prepare is for committed.
-	// With label "containerd.io/snapshot.ref" in preparing, snapshotter
-	// author will know it is for pulling image. It will be useful.
-	//
-	// The label is only propagated during pulling image. So, is it possible
-	// to propagate by image.Unpack()?
-	labelKeyTargetSnapshotRef = "containerd.io/snapshot.ref"
 
-	// labelKeyImageRef is the label to mark where the snapshot comes from.
-	//
-	// TODO(fuweid): Is it possible to use it in upstream?
-	labelKeyImageRef = "containerd.io/snapshot/image-ref"
+	// label.TurboOCIMediaType is the index annotation key for image layer media type
+	RoDir = "overlayfs" // overlayfs as rootfs. upper + lower (overlaybd)
+	RwDir = "dir"       // mount overlaybd as rootfs
+	RwDev = "dev"       // use overlaybd directly
 
-	// labelKeyOverlayBDBlobDigest is the annotation key in the manifest to
-	// describe the digest of blob in OverlayBD format.
-	//
-	// NOTE: The annotation is part of image layer blob's descriptor.
-	labelKeyOverlayBDBlobDigest = "containerd.io/snapshot/overlaybd/blob-digest"
-
-	// labelKeyOverlayBDBlobSize is the annotation key in the manifest to
-	// describe the size of blob in OverlayBD format.
-	//
-	// NOTE: The annotation is part of image layer blob's descriptor.
-	labelKeyOverlayBDBlobSize = "containerd.io/snapshot/overlaybd/blob-size"
-
-	// labelKeyOverlayBDBlobFsType is the annotation key in the manifest to
-	// describe the filesystem type to be mounted as of blob in OverlayBD format.
-	//
-	// NOTE: The annotation is part of image layer blob's descriptor.
-	labelKeyOverlayBDBlobFsType = "containerd.io/snapshot/overlaybd/blob-fs-type"
-
-	// labelKeyAccelerationLayer is the annotation key in the manifest to indicate
-	// whether a top layer is acceleration layer or not.
-	labelKeyAccelerationLayer = "containerd.io/snapshot/overlaybd/acceleration-layer"
-
-	// labelKeyRecordTrace tells snapshotter to record trace
-	labelKeyRecordTrace = "containerd.io/snapshot/overlaybd/record-trace"
-
-	// labelKeyRecordTracePath is the the file path to record trace
-	labelKeyRecordTracePath = "containerd.io/snapshot/overlaybd/record-trace-path"
-
-	// labelKeyCriImageRef is thr image-ref from cri
-	labelKeyCriImageRef = "containerd.io/snapshot/cri.image-ref"
-
-	// labelKeyTurboOCIDigest is the index annotation key for image layer digest
-	labelKeyFastOCIDigest  = "containerd.io/snapshot/overlaybd/fastoci/target-digest" // legacy
-	labelKeyTurboOCIDigest = "containerd.io/snapshot/overlaybd/turbo-oci/target-digest"
-
-	// labelKeyTurboOCIMediaType is the index annotation key for image layer media type
-	labelKeyFastOCIMediaType  = "containerd.io/snapshot/overlaybd/fastoci/target-media-type" // legacy
-	labelKeyTurboOCIMediaType = "containerd.io/snapshot/overlaybd/turbo-oci/target-media-type"
 )
 
 // interface
@@ -355,12 +309,12 @@ func (o *snapshotter) getWritableType(ctx context.Context, id string, info snaps
 }
 
 func (o *snapshotter) checkTurboOCI(labels map[string]string) (bool, string, string) {
-	if st1, ok1 := labels[labelKeyTurboOCIDigest]; ok1 {
-		return true, st1, labels[labelKeyTurboOCIMediaType]
+	if st1, ok1 := labels[label.TurboOCIDigest]; ok1 {
+		return true, st1, labels[label.TurboOCIMediaType]
 	}
 
-	if st2, ok2 := labels[labelKeyFastOCIDigest]; ok2 {
-		return true, st2, labels[labelKeyFastOCIMediaType]
+	if st2, ok2 := labels[label.FastOCIDigest]; ok2 {
+		return true, st2, labels[label.FastOCIMediaType]
 	}
 	return false, "", ""
 }
@@ -414,11 +368,11 @@ func (o *snapshotter) createMountPoint(ctx context.Context, kind snapshots.Kind,
 	// If the layer is in overlaybd format, construct backstore spec and saved it into snapshot dir.
 	// Return ErrAlreadyExists to skip pulling and unpacking layer. See https://github.com/containerd/containerd/blob/master/docs/remote-snapshotter.md#snapshotter-apis-for-querying-remote-snapshots
 	// This part code is only for Pull.
-	if targetRef, ok := info.Labels[labelKeyTargetSnapshotRef]; ok {
+	if targetRef, ok := info.Labels[label.TargetSnapshotRef]; ok {
 
 		// Acceleration layer will not use remote snapshot. It still needs containerd to pull,
 		// unpack blob and commit snapshot. So return a normal mount point here.
-		isAccelLayer := info.Labels[labelKeyAccelerationLayer]
+		isAccelLayer := info.Labels[label.AccelerationLayer]
 		log.G(ctx).Infof("Prepare (targetRefLabel: %s, accelLayerLabel: %s)", targetRef, isAccelLayer)
 		if isAccelLayer == "yes" {
 			if err := o.constructSpecForAccelLayer(id, parentID); err != nil {
@@ -481,7 +435,8 @@ func (o *snapshotter) createMountPoint(ctx context.Context, kind snapshots.Kind,
 	stype := storageTypeNormal
 	writeType := o.getWritableType(ctx, parentID, info)
 	// If Preparing for rootfs, find metadata from its parent (top layer), launch and mount backstore device.
-	if _, ok := info.Labels[labelKeyTargetSnapshotRef]; !ok {
+	if _, ok := info.Labels[label.TargetSnapshotRef]; !ok {
+		log.G(ctx).Infof("Preparing rootfs. writeType: %d", writeType)
 		if writeType != roDir {
 			stype = storageTypeLocalBlock
 			if err := o.constructOverlayBDSpec(ctx, key, true); err != nil {
@@ -496,9 +451,9 @@ func (o *snapshotter) createMountPoint(ctx context.Context, kind snapshots.Kind,
 		switch stype {
 		case storageTypeLocalBlock, storageTypeRemoteBlock:
 			if parent != "" {
-				parentIsAccelLayer := parentInfo.Labels[labelKeyAccelerationLayer] == "yes"
-				needRecordTrace := info.Labels[labelKeyRecordTrace] == "yes"
-				recordTracePath := info.Labels[labelKeyRecordTracePath]
+				parentIsAccelLayer := parentInfo.Labels[label.AccelerationLayer] == "yes"
+				needRecordTrace := info.Labels[label.RecordTrace] == "yes"
+				recordTracePath := info.Labels[label.RecordTracePath]
 				log.G(ctx).Infof("Prepare rootfs (parentIsAccelLayer: %t, needRecordTrace: %t, recordTracePath: %s)",
 					parentIsAccelLayer, needRecordTrace, recordTracePath)
 
@@ -530,7 +485,7 @@ func (o *snapshotter) createMountPoint(ctx context.Context, kind snapshots.Kind,
 				obdID = parentID
 				obdInfo = &parentInfo
 			}
-			fsType, ok := obdInfo.Labels[labelKeyOverlayBDBlobFsType]
+			fsType, ok := obdInfo.Labels[label.OverlayBDBlobFsType]
 			if !ok {
 				log.G(ctx).Warnf("cannot get fs type from label, %v", obdInfo.Labels)
 				fsType = "ext4"
@@ -568,8 +523,21 @@ func (o *snapshotter) createMountPoint(ctx context.Context, kind snapshots.Kind,
 	var m []mount.Mount
 	switch stype {
 	case storageTypeNormal:
-		m = o.normalOverlayMount(s)
-		log.G(ctx).Debugf("return mount point(R/W mode: %d): %v", writeType, m)
+		if _, ok := info.Labels[label.LayerToTurboOCI]; ok {
+			m = []mount.Mount{
+				{
+					Source: o.upperPath(s.ID),
+					Type:   "bind",
+					Options: []string{
+						"rw",
+						"rbind",
+					},
+				},
+			}
+		} else {
+			m = o.normalOverlayMount(s)
+			log.G(ctx).Debugf("return mount point(R/W mode: %d): %v", writeType, m)
+		}
 	case storageTypeLocalBlock, storageTypeRemoteBlock:
 		m, err = o.basedOnBlockDeviceMount(ctx, s, writeType)
 		if err != nil {
@@ -578,13 +546,28 @@ func (o *snapshotter) createMountPoint(ctx context.Context, kind snapshots.Kind,
 	default:
 		panic("unreachable")
 	}
+	log.G(ctx).Debugf("return mount point(R/W mode: %s): %v", writeType, m)
 	return m, nil
 
 }
 
 // Prepare creates an active snapshot identified by key descending from the provided parent.
 func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...snapshots.Opt) (_ []mount.Mount, retErr error) {
+	log.G(ctx).Infof("Prepare (key: %s, parent: %s)", key, parent)
+	start := time.Now()
+	defer func() {
+		if retErr != nil {
+			metrics.GRPCErrCount.WithLabelValues("Prepare").Inc()
+		} else {
+			log.G(ctx).WithFields(logrus.Fields{
+				"d":      time.Since(start),
+				"key":    key,
+				"parent": parent,
+			}).Infof("Prepare")
+		}
+		metrics.GRPCLatency.WithLabelValues("Prepare").Observe(time.Since(start).Seconds())
 
+	}()
 	return o.createMountPoint(ctx, snapshots.KindActive, key, parent, opts...)
 }
 
@@ -599,7 +582,21 @@ func (o *snapshotter) View(ctx context.Context, key, parent string, opts ...snap
 // called on an read-write or readonly transaction.
 //
 // This can be used to recover mounts after calling View or Prepare.
-func (o *snapshotter) Mounts(ctx context.Context, key string) (res []mount.Mount, resErr error) {
+func (o *snapshotter) Mounts(ctx context.Context, key string) (_ []mount.Mount, retErr error) {
+	log.G(ctx).Infof("Mounts (key: %s)", key)
+
+	start := time.Now()
+	defer func() {
+		if retErr != nil {
+			metrics.GRPCErrCount.WithLabelValues("Mounts").Inc()
+		} else {
+			log.G(ctx).WithFields(logrus.Fields{
+				"d":   time.Since(start),
+				"key": key,
+			}).Infof("Mounts")
+		}
+		metrics.GRPCLatency.WithLabelValues("Mounts").Observe(time.Since(start).Seconds())
+	}()
 	ctx, t, err := o.ms.TransactionContext(ctx, false)
 	if err != nil {
 		return nil, err
@@ -611,11 +608,6 @@ func (o *snapshotter) Mounts(ctx context.Context, key string) (res []mount.Mount
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to get snapshot")
 	}
-
-	logrus.Infof("enter Mounts: id = %s", s.ID)
-	defer func() {
-		logrus.Infof("exit Mounts: id = %s, return = %v", s.ID, res)
-	}()
 
 	recordTracePath, err := getRecordTracePath(ctx, key)
 	if err != nil {
@@ -649,7 +641,7 @@ func (o *snapshotter) Mounts(ctx context.Context, key string) (res []mount.Mount
 				return nil, errors.Wrapf(err, "failed to get info of parent snapshot %s", info.Parent)
 			}
 
-			fsType, ok := parentInfo.Labels[labelKeyOverlayBDBlobFsType]
+			fsType, ok := parentInfo.Labels[label.OverlayBDBlobFsType]
 			if !ok {
 				fsType = "ext4"
 			}
@@ -670,6 +662,19 @@ func (o *snapshotter) Mounts(ctx context.Context, key string) (res []mount.Mount
 // Commit
 func (o *snapshotter) Commit(ctx context.Context, name, key string, opts ...snapshots.Opt) (retErr error) {
 	log.G(ctx).Infof("Commit (key: %s, name: %s)", key, name)
+	start := time.Now()
+	defer func() {
+		if retErr != nil {
+			metrics.GRPCErrCount.WithLabelValues("Commit").Inc()
+		} else {
+			log.G(ctx).WithFields(logrus.Fields{
+				"d":    time.Since(start),
+				"name": name,
+				"key":  key,
+			}).Infof("Commit")
+		}
+		metrics.GRPCLatency.WithLabelValues("Commit").Observe(time.Since(start).Seconds())
+	}()
 
 	ctx, t, err := o.ms.TransactionContext(ctx, true)
 	if err != nil {
@@ -697,7 +702,7 @@ func (o *snapshotter) Commit(ctx context.Context, name, key string, opts ...snap
 		if _, writableBD := oinfo.Labels[LabelSupportReadWriteMode]; writableBD {
 
 			// TODO(fuweid): how to rollback?
-			if oinfo.Labels[labelKeyAccelerationLayer] == "yes" {
+			if oinfo.Labels[label.AccelerationLayer] == "yes" {
 				log.G(ctx).Info("Commit accel-layer requires no writable_data")
 			} else {
 				if err := o.unmountAndDetachBlockDevice(ctx, id, key); err != nil {
@@ -732,7 +737,16 @@ func (o *snapshotter) Commit(ctx context.Context, name, key string, opts ...snap
 		return err
 	}
 
-	log.G(ctx).Infof("Commit info (id: %s, info: %v, stype: %d)", id, info.Labels, stype)
+	log.G(ctx).Debugf("Commit info (id: %s, info: %v, stype: %d)", id, info.Labels, stype)
+	// Firstly, try to convert an OCIv1 tarball to a turboOCI layer.
+	// then change stype to 'storageTypeLocalBlock' which can make it attach a overlaybd block
+	if stype == storageTypeLocalLayer {
+		log.G(ctx).Infof("convet a local blob to turboOCI layer (sn: %s)", id)
+		if err := o.constructOverlayBDSpec(ctx, name, false); err != nil {
+			return errors.Wrapf(err, "failed to construct overlaybd config")
+		}
+		stype = storageTypeLocalBlock
+	}
 
 	if stype == storageTypeLocalBlock {
 		if err := o.constructOverlayBDSpec(ctx, name, false); err != nil {
@@ -757,7 +771,7 @@ func (o *snapshotter) Commit(ctx context.Context, name, key string, opts ...snap
 }
 
 func AddCommitLayerFlag(dir string) error {
-	return ioutil.WriteFile(filepath.Join(dir, commitLayerFlag), []byte(commitLayerFlag), 0666)
+	return os.WriteFile(filepath.Join(dir, commitLayerFlag), []byte(commitLayerFlag), 0666)
 }
 
 func HasCommitLayerFlag(dir string) bool {
@@ -781,11 +795,11 @@ func (o *snapshotter) CommitMark(ctx context.Context, id, parent string) error {
 		if _, err := os.Stat(srcPath); err != nil && os.IsNotExist(err) {
 			return nil
 		}
-		data, err := ioutil.ReadFile(srcPath)
+		data, err := os.ReadFile(srcPath)
 		if err != nil {
 			return err
 		}
-		if err := ioutil.WriteFile(filepath.Join(o.getSnDir(id), "block", "config.v1.json"), data, 0666); err != nil {
+		if err := os.WriteFile(filepath.Join(o.getSnDir(id), "block", "config.v1.json"), data, 0666); err != nil {
 			return err
 		}
 		return AddCommitLayerFlag(o.getSnDir(id))
@@ -901,7 +915,7 @@ func (o *snapshotter) Walk(ctx context.Context, fn snapshots.WalkFunc, fs ...str
 }
 
 func (o *snapshotter) prepareDirectory(ctx context.Context, snapshotDir string, kind snapshots.Kind) (string, error) {
-	td, err := ioutil.TempDir(snapshotDir, "new-")
+	td, err := os.MkdirTemp(snapshotDir, "new-")
 	if err != nil {
 		return "", errors.Wrap(err, "failed to create temp dir")
 	}
@@ -951,7 +965,7 @@ func (o *snapshotter) basedOnBlockDeviceMount(ctx context.Context, s storage.Sna
 		}, nil
 	}
 	if writeType == rwDev {
-		devName, err := ioutil.ReadFile(o.overlaybdBackstoreMarkFile(s.ID))
+		devName, err := os.ReadFile(o.overlaybdBackstoreMarkFile(s.ID))
 		if err != nil {
 			return nil, err
 		}
@@ -1138,13 +1152,13 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 	}
 	td = ""
 
-	img, ok := info.Labels[labelKeyCriImageRef]
+	img, ok := info.Labels[label.CRIImageRef]
 	if !ok {
-		img, ok = info.Labels[labelKeyImageRef]
+		img, ok = info.Labels[label.TargetImageRef]
 	}
 	if ok {
 		log.G(ctx).Infof("found imageRef: %s", img)
-		if err := ioutil.WriteFile(filepath.Join(path, ImageRefFile), []byte(img), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(path, ImageRefFile), []byte(img), 0644); err != nil {
 			log.G(ctx).Errorf("LSMD ERROR write imageRef '%s'. path: %s, err: %s", img, filepath.Join(path, ImageRefFile), err.Error())
 		}
 	} else {
@@ -1159,12 +1173,16 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 	return id, info, nil
 }
 
-func (o *snapshotter) identifySnapshotStorageType(ctx context.Context, id string, info snapshots.Info) (storageType, error) {
-	if _, ok := info.Labels[labelKeyTargetSnapshotRef]; ok {
-		blobSize, hasBDBlobSize := info.Labels[labelKeyOverlayBDBlobSize]
-		blobDigest, hasBDBlobDigest := info.Labels[labelKeyOverlayBDBlobDigest]
-		ref, hasRef := info.Labels[labelKeyImageRef]
-		criRef, hasCriRef := info.Labels[labelKeyCriImageRef]
+func (o *snapshotter) identifySnapshotStorageType(ctx context.Context, id string, info snapshots.Info) (st storageType, e error) {
+
+	defer func() {
+		log.G(ctx).Debugf("storageType(sn: %s): %d", id, st)
+	}()
+	if _, ok := info.Labels[label.TargetSnapshotRef]; ok {
+		blobSize, hasBDBlobSize := info.Labels[label.TargetSnapshotRef]
+		blobDigest, hasBDBlobDigest := info.Labels[label.OverlayBDBlobDigest]
+		ref, hasRef := info.Labels[label.TargetImageRef]
+		criRef, hasCriRef := info.Labels[label.CRIImageRef]
 
 		log.G(ctx).Infof("hasBDBlobSize: %s, hasBDBlobDigest: %s, hasRef: %s, hasCriRef: %s", blobSize, blobDigest, ref, criRef)
 		if hasBDBlobSize && hasBDBlobDigest {
@@ -1189,6 +1207,13 @@ func (o *snapshotter) identifySnapshotStorageType(ctx context.Context, id string
 	if err == nil {
 		return st, nil
 	}
+
+	// check layer.tar if it should be converted to turboOCI
+	filePath = o.overlaybdOCILayerPath(id)
+	if _, err := os.Stat(filePath); err == nil {
+		log.G(ctx).Infof("uncompressed layer found in sn: %s", id)
+		return storageTypeLocalLayer, nil
+	}
 	if os.IsNotExist(err) {
 		// check config.v1.json
 		log.G(ctx).Debugf("failed to identify by writable_data(sn: %s), try to identify by config.v1.json", id)
@@ -1199,7 +1224,6 @@ func (o *snapshotter) identifySnapshotStorageType(ctx context.Context, id string
 		}
 		return storageTypeNormal, nil
 	}
-	log.G(ctx).Debugf("storageType(sn: %s): %d", id, st)
 
 	return st, err
 }
@@ -1214,6 +1238,18 @@ func (o *snapshotter) upperPath(id string) string {
 
 func (o *snapshotter) workPath(id string) string {
 	return filepath.Join(o.root, "snapshots", id, "work")
+}
+
+func (o *snapshotter) convertTempdir(id string) string {
+	return filepath.Join(o.root, "snapshots", id, "temp")
+}
+
+func (o *snapshotter) blockPath(id string) string {
+	return filepath.Join(o.root, "snapshots", id, "block")
+}
+
+func (o *snapshotter) turboOCIFsMeta(id string) string {
+	return filepath.Join(o.root, "snapshots", id, "fs", "ext4.fs.meta")
 }
 
 func (o *snapshotter) magicFilePath(id string) string {
@@ -1240,12 +1276,16 @@ func (o *snapshotter) overlaybdWritableDataPath(id string) string {
 	return filepath.Join(o.root, "snapshots", id, "block", "writable_data")
 }
 
-func (o *snapshotter) overlaybdBackstoreMarkFile(id string) string {
-	return filepath.Join(o.root, "snapshots", id, "block", "backstore_mark")
+func (o *snapshotter) overlaybdOCILayerPath(id string) string {
+	return filepath.Join(o.root, "snapshots", id, "layer.tar")
 }
 
-func (o *snapshotter) turboOCIFsMeta(id string) string {
-	return filepath.Join(o.root, "snapshots", id, "fs", "ext4.fs.meta")
+func (o *snapshotter) overlaybdOCILayerMeta(id string) string {
+	return filepath.Join(o.root, "snapshots", id, "layer.metadata")
+}
+
+func (o *snapshotter) overlaybdBackstoreMarkFile(id string) string {
+	return filepath.Join(o.root, "snapshots", id, "block", "backstore_mark")
 }
 
 func (o *snapshotter) turboOCIGzipIdx(id string) string {
@@ -1292,8 +1332,8 @@ func getRecordTracePath(ctx context.Context, key string) (string, error) {
 	if err != nil {
 		return "", errors.Wrapf(err, "failed to get info")
 	}
-	if info.Labels[labelKeyRecordTrace] == "yes" {
-		recordTracePath = info.Labels[labelKeyRecordTracePath]
+	if info.Labels[label.RecordTrace] == "yes" {
+		recordTracePath = info.Labels[label.RecordTracePath]
 	}
 	return recordTracePath, nil
 }
