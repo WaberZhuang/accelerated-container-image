@@ -484,23 +484,25 @@ func (o *snapshotter) constructOverlayBDSpec(ctx context.Context, key string, wr
 		if writable {
 			return errors.Errorf("remote block device is readonly, not support writable")
 		}
-
-		blobSize, err := strconv.Atoi(info.Labels[label.OverlayBDBlobSize])
+		ri := o.getImageRef(ctx, id, info)
+		blobSize, err := strconv.Atoi(info.Labels[ri.blobSize])
 		if err != nil {
-			return errors.Wrapf(err, "failed to parse value of label %s of snapshot %s", label.OverlayBDBlobSize, key)
+			return errors.Wrapf(err, "failed to parse value of label %s of snapshot %s", ri.blobSize, key)
 		}
 
-		blobDigest := info.Labels[label.OverlayBDBlobDigest]
-		ref, hasRef := info.Labels[label.TargetImageRef]
-		if !hasRef {
-			criRef, hasCriRef := info.Labels[label.CRIImageRef]
-			if !hasCriRef {
-				return errors.Errorf("no image-ref label")
-			}
-			ref = criRef
+		// blobDigest := info.Labels[label.OverlayBDBlobDigest]
+		// ref, hasRef := info.Labels[label.TargetImageRef]
+		// if !hasRef {
+		// 	criRef, hasCriRef := info.Labels[label.CRIImageRef]
+		// 	if !hasCriRef {
+		// 		return errors.Errorf("no image-ref label")
+		// 	}
+		// 	ref = criRef
+		// }
+		if ri.imageRef == "" {
+			return errors.Errorf("no image-ref label")
 		}
-
-		blobPrefixURL, err := o.constructImageBlobURL(ref)
+		blobPrefixURL, err := o.constructImageBlobURL(ri.imageRef)
 		if err != nil {
 			return errors.Wrapf(err, "failed to construct image blob prefix url for snapshot %s", key)
 		}
@@ -519,7 +521,7 @@ func (o *snapshotter) constructOverlayBDSpec(ctx context.Context, key string, wr
 			configJSON.Lowers = append(configJSON.Lowers, lower)
 		} else {
 			configJSON.Lowers = append(configJSON.Lowers, sn.OverlayBDBSConfigLower{
-				Digest: blobDigest,
+				Digest: ri.blobDigest,
 				Size:   int64(blobSize),
 				Dir:    o.upperPath(id),
 			})
@@ -575,9 +577,19 @@ func (o *snapshotter) constructOverlayBDSpec(ctx context.Context, key string, wr
 		if !writable {
 			return errors.Errorf("unexpect storage %v of snapshot %v during construct overlaybd spec(writable=%v, parent=%s)", stype, key, writable, info.Parent)
 		}
-
+		vsizeGB := 0
+		if info.Parent == "" {
+			if vsize, ok := info.Labels[label.OverlayBDVsize]; ok {
+				vsizeGB, err = strconv.Atoi(vsize)
+				if err != nil {
+					vsizeGB = 256
+				}
+			} else {
+				vsizeGB = 256
+			}
+		}
 		log.G(ctx).Infof("create writable layer for sn: %s", id)
-		if err := o.prepareWritableOverlaybd(ctx, id); err != nil {
+		if err := o.prepareWritableOverlaybd(ctx, id, vsizeGB); err != nil {
 			return err
 		}
 
@@ -662,17 +674,13 @@ func (o *snapshotter) atomicWriteOverlaybdTargetConfig(snID string, configJSON *
 }
 
 // prepareWritableOverlaybd
-func (o *snapshotter) prepareWritableOverlaybd(ctx context.Context, snID string) error {
-	binpath := filepath.Join(o.config.OverlayBDUtilBinDir, "overlaybd-create")
+func (o *snapshotter) prepareWritableOverlaybd(ctx context.Context, snID string, vsizeGB int) error {
 
-	// TODO(fuweid): 256GB can be configurable?
-	out, err := exec.CommandContext(ctx, binpath,
-		o.overlaybdWritableDataPath(snID),
-		o.overlaybdWritableIndexPath(snID), "256").CombinedOutput()
-	if err != nil {
-		return errors.Wrapf(err, "failed to prepare writable overlaybd: %s", out)
-	}
-	return nil
+	args := []string{fmt.Sprintf("%d", vsizeGB), "-s"}
+	// if o.writableLayerType == "sparse" {
+	// 	args = append(args, "-s")
+	// }
+	return utils.Create(ctx, o.blockPath(snID), args...)
 }
 
 // commitWritableOverlaybd

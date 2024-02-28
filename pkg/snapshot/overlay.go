@@ -31,6 +31,7 @@ import (
 
 	"github.com/containerd/accelerated-container-image/pkg/label"
 	"github.com/containerd/accelerated-container-image/pkg/metrics"
+	"github.com/containerd/accelerated-container-image/pkg/utils"
 	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/mount"
@@ -169,6 +170,14 @@ type snapshotter struct {
 	indexOff     bool
 	experimental bool
 	locker       *locker.Locker
+}
+
+type ImageRefInfo struct {
+	blobSize    string
+	blobDigest  string
+	imageRef    string
+	snapshotRef string
+	accelerated bool // check if the imageRef has suffix "_accelerated"
 }
 
 // NewSnapshotter returns a Snapshotter which uses block device based on overlayFS.
@@ -365,15 +374,16 @@ func (o *snapshotter) createMountPoint(ctx context.Context, kind snapshots.Kind,
 		}
 	}
 
+	ri := o.getImageRef(ctx, id, info)
 	// If the layer is in overlaybd format, construct backstore spec and saved it into snapshot dir.
 	// Return ErrAlreadyExists to skip pulling and unpacking layer. See https://github.com/containerd/containerd/blob/master/docs/remote-snapshotter.md#snapshotter-apis-for-querying-remote-snapshots
 	// This part code is only for Pull.
-	if targetRef, ok := info.Labels[label.TargetSnapshotRef]; ok {
+	if ri.imageRef != "" {
 
 		// Acceleration layer will not use remote snapshot. It still needs containerd to pull,
 		// unpack blob and commit snapshot. So return a normal mount point here.
 		isAccelLayer := info.Labels[label.AccelerationLayer]
-		log.G(ctx).Infof("Prepare (targetRefLabel: %s, accelLayerLabel: %s)", targetRef, isAccelLayer)
+		log.G(ctx).Infof("Prepare (targetRefLabel: %s, accelLayerLabel: %s)", ri.imageRef, isAccelLayer)
 		if isAccelLayer == "yes" {
 			if err := o.constructSpecForAccelLayer(id, parentID); err != nil {
 				return nil, errors.Wrapf(err, "constructSpecForAccelLayer failed: id %s", id)
@@ -405,11 +415,11 @@ func (o *snapshotter) createMountPoint(ctx context.Context, kind snapshots.Kind,
 			stype = storageTypeNormal
 		}
 		if stype == storageTypeRemoteBlock {
-			if _, _, err = o.commit(ctx, targetRef, key, opts...); err != nil {
+			if _, _, err = o.commit(ctx, ri.imageRef, key, opts...); err != nil {
 				return nil, err
 			}
 
-			if err := o.constructOverlayBDSpec(ctx, targetRef, false); err != nil {
+			if err := o.constructOverlayBDSpec(ctx, ri.imageRef, false); err != nil {
 				return nil, err
 			}
 
@@ -417,10 +427,10 @@ func (o *snapshotter) createMountPoint(ctx context.Context, kind snapshots.Kind,
 			if err := t.Commit(); err != nil {
 				return nil, err
 			}
-			return nil, errors.Wrapf(errdefs.ErrAlreadyExists, "target snapshot %q", targetRef)
+			return nil, errors.Wrapf(errdefs.ErrAlreadyExists, "target snapshot %q", ri.imageRef)
 		}
 		if o.experimental {
-			isStargz, err := o.checkAndPrepareStargzForPullPhrase(ctx, key, targetRef, id, info.Labels, opts...)
+			isStargz, err := o.checkAndPrepareStargzForPullPhrase(ctx, key, ri.imageRef, id, info.Labels, opts...)
 			if isStargz {
 				rollback = false
 				if err := t.Commit(); err != nil {
@@ -434,8 +444,9 @@ func (o *snapshotter) createMountPoint(ctx context.Context, kind snapshots.Kind,
 
 	stype := storageTypeNormal
 	writeType := o.getWritableType(ctx, parentID, info)
+
 	// If Preparing for rootfs, find metadata from its parent (top layer), launch and mount backstore device.
-	if _, ok := info.Labels[label.TargetSnapshotRef]; !ok {
+	if ri.snapshotRef == "" {
 		log.G(ctx).Infof("Preparing rootfs. writeType: %d", writeType)
 		if writeType != roDir {
 			stype = storageTypeLocalBlock
@@ -546,7 +557,7 @@ func (o *snapshotter) createMountPoint(ctx context.Context, kind snapshots.Kind,
 	default:
 		panic("unreachable")
 	}
-	log.G(ctx).Debugf("return mount point(R/W mode: %s): %v", writeType, m)
+	log.G(ctx).Debugf("return mount point(R/W mode: %d): %v", writeType, m)
 	return m, nil
 
 }
@@ -1151,15 +1162,11 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 		return "", snapshots.Info{}, errors.Wrap(err, "failed to rename")
 	}
 	td = ""
-
-	img, ok := info.Labels[label.CRIImageRef]
-	if !ok {
-		img, ok = info.Labels[label.TargetImageRef]
-	}
-	if ok {
-		log.G(ctx).Infof("found imageRef: %s", img)
-		if err := os.WriteFile(filepath.Join(path, ImageRefFile), []byte(img), 0644); err != nil {
-			log.G(ctx).Errorf("LSMD ERROR write imageRef '%s'. path: %s, err: %s", img, filepath.Join(path, ImageRefFile), err.Error())
+	ri := o.getImageRef(ctx, s.ID, info)
+	if ri.imageRef != "" {
+		log.G(ctx).Infof("found imageRef: %s", ri.imageRef)
+		if err := os.WriteFile(filepath.Join(path, ImageRefFile), []byte(ri.imageRef), 0644); err != nil {
+			log.G(ctx).Errorf("LSMD ERROR write imageRef '%s'. path: %s, err: %s", ri.imageRef, filepath.Join(path, ImageRefFile), err.Error())
 		}
 	} else {
 		log.G(ctx).Warnf("imageRef meta not found.")
@@ -1178,19 +1185,11 @@ func (o *snapshotter) identifySnapshotStorageType(ctx context.Context, id string
 	defer func() {
 		log.G(ctx).Debugf("storageType(sn: %s): %d", id, st)
 	}()
-	if _, ok := info.Labels[label.TargetSnapshotRef]; ok {
-		blobSize, hasBDBlobSize := info.Labels[label.TargetSnapshotRef]
-		blobDigest, hasBDBlobDigest := info.Labels[label.OverlayBDBlobDigest]
-		ref, hasRef := info.Labels[label.TargetImageRef]
-		criRef, hasCriRef := info.Labels[label.CRIImageRef]
-
-		log.G(ctx).Infof("hasBDBlobSize: %s, hasBDBlobDigest: %s, hasRef: %s, hasCriRef: %s", blobSize, blobDigest, ref, criRef)
-		if hasBDBlobSize && hasBDBlobDigest {
-			if hasRef || hasCriRef {
-				return storageTypeRemoteBlock, nil
-			}
+	ri := o.getImageRef(ctx, id, info)
+	if ri.snapshotRef != "" {
+		if ri.blobDigest != "" && ri.blobSize != "" && ri.imageRef != "" {
+			return storageTypeRemoteBlock, nil
 		}
-
 	}
 
 	// check overlaybd.commit
@@ -1211,8 +1210,15 @@ func (o *snapshotter) identifySnapshotStorageType(ctx context.Context, id string
 	// check layer.tar if it should be converted to turboOCI
 	filePath = o.overlaybdOCILayerPath(id)
 	if _, err := os.Stat(filePath); err == nil {
-		log.G(ctx).Infof("uncompressed layer found in sn: %s", id)
-		return storageTypeLocalLayer, nil
+		if ri.accelerated {
+			log.G(ctx).Infof("both accelerated tag and uncompressed layer found in sn: %s", id)
+			err = o.untarLocalLayer(ctx, id)
+			return storageTypeNormal, nil
+
+		} else {
+			log.G(ctx).Infof("uncompressed layer found in sn: %s", id)
+			return storageTypeLocalLayer, nil
+		}
 	}
 	if os.IsNotExist(err) {
 		// check config.v1.json
@@ -1297,6 +1303,31 @@ func (o *snapshotter) Close() error {
 	return o.ms.Close()
 }
 
+func (o *snapshotter) getImageRef(ctx context.Context, snID string, info snapshots.Info) (ri ImageRefInfo) {
+	defer func() {
+		log.G(ctx).Infof("imageRef of sn_%s: [%+v]", snID, ri)
+	}()
+	ri.accelerated = false
+	if _, ok := info.Labels[label.TargetSnapshotRef]; ok {
+		ri.snapshotRef = info.Labels[label.TargetSnapshotRef]
+		ri.blobSize = info.Labels[label.OverlayBDBlobSize]
+		ri.blobDigest = info.Labels[label.OverlayBDBlobDigest]
+		ref, hasRef := info.Labels[label.TargetImageRef]
+		criRef, hasCriRef := info.Labels[label.CRIImageRef]
+		if hasRef {
+			ri.imageRef = ref
+		}
+		if hasCriRef {
+			ri.imageRef = criRef
+		}
+		if strings.HasSuffix(ri.imageRef, "_accelerated") {
+			ri.accelerated = true
+		}
+		return
+	}
+	return ImageRefInfo{}
+}
+
 func (o *snapshotter) identifyLocalStorageType(filePath string) (storageType, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -1316,6 +1347,12 @@ func (o *snapshotter) identifyLocalStorageType(filePath string) (storageType, er
 		return storageTypeLocalBlock, nil
 	}
 	return storageTypeNormal, nil
+}
+
+func (o *snapshotter) untarLocalLayer(ctx context.Context, id string) error {
+	tarball := o.overlaybdOCILayerPath(id)
+	snDir := o.snPath(id)
+	return utils.Untar(tarball, snDir)
 }
 
 func isOverlaybdFileHeader(header []byte) bool {

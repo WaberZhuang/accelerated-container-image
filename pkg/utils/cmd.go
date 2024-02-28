@@ -17,9 +17,11 @@
 package utils
 
 import (
+	"archive/tar"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path"
@@ -249,6 +251,60 @@ func ConvertLayer(ctx context.Context, opt *ConvertOption) error {
 		"-z", "--turboOCI",
 	).CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to overlaybd-commit: %w, output: %s", err, out)
+	}
+	return nil
+}
+
+func Untar(tarball string, destDir string) error {
+	file, err := os.Open(tarball)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	// Create a new tar reader.
+	tarReader := tar.NewReader(file)
+
+	// Iterate through the files in the archive.
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break // End of the archive
+		}
+		if err != nil {
+			return err
+		}
+
+		// Construct the full path for the file to be written.
+		path := filepath.Join(destDir, header.Name)
+
+		// Check the type of the file.
+		switch header.Typeflag {
+		case tar.TypeDir:
+			// It's a directory, create it.
+			if err := os.MkdirAll(path, os.ModePerm); err != nil {
+				return err
+			}
+		case tar.TypeReg:
+			// It's a regular file, extract it.
+			outFile, err := os.Create(path)
+			if err != nil {
+				return err
+			}
+
+			// Copy the file data from the tarball to the file.
+			if _, err := io.Copy(outFile, tarReader); err != nil {
+				outFile.Close()
+				return err
+			}
+			outFile.Close()
+			// Set file permissions
+			if err := os.Chmod(path, os.FileMode(header.Mode)); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("unable to untar type: %c in file %s", header.Typeflag, path)
+		}
 	}
 	return nil
 }
