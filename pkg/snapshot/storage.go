@@ -153,7 +153,7 @@ func (o *snapshotter) parseAndCheckMounted(ctx context.Context, r io.Reader, dir
 	return false, nil
 }
 
-// unmountAndDetachBlockDevice
+// unmountAndDetachBlockDevice will do nothing if the device is already destroyed
 func (o *snapshotter) unmountAndDetachBlockDevice(ctx context.Context, snID string, snKey string) (err error) {
 	devName, err := os.ReadFile(o.overlaybdBackstoreMarkFile(snID))
 	if err != nil {
