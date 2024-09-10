@@ -393,34 +393,6 @@ func (b *overlaybdBuilder) Build(ctx context.Context) (v1.Descriptor, error) {
 			return nil
 		})
 
-		// download goroutine
-		g.Go(func() error {
-			var cachedLayer *v1.Descriptor
-			select {
-			case <-rctx.Done():
-			case cachedLayer = <-alreadyConverted[idx]:
-			}
-
-			defer close(downloaded[idx])
-			if cachedLayer != nil {
-				// download the converted layer
-				err := b.engine.DownloadConvertedLayer(rctx, idx, *cachedLayer)
-				if err == nil {
-					logrus.Infof("downloaded cached layer %d", idx)
-					sendToChannel(rctx, downloaded[idx], nil)
-					return nil
-				}
-				logrus.Infof("failed to download cached layer %d falling back to conversion : %s", idx, err)
-			}
-
-			if err := b.engine.DownloadLayer(rctx, idx); err != nil {
-				return err
-			}
-			logrus.Infof("downloaded layer %d", idx)
-			sendToChannel(rctx, downloaded[idx], nil)
-			return nil
-		})
-
 		// convert goroutine
 		g.Go(func() error {
 			defer close(converted[idx])
@@ -456,6 +428,39 @@ func (b *overlaybdBuilder) Build(ctx context.Context) (v1.Descriptor, error) {
 			return nil
 		})
 	}
+	// download goroutine
+	g.Go(func() error {
+		download := func(idx int) error {
+			var cachedLayer *v1.Descriptor
+			select {
+			case <-rctx.Done():
+			case cachedLayer = <-alreadyConverted[idx]:
+			}
+
+			defer close(downloaded[idx])
+			if cachedLayer != nil {
+				// download the converted layer
+				err := b.engine.DownloadConvertedLayer(rctx, idx, *cachedLayer)
+				if err == nil {
+					logrus.Infof("downloaded cached layer %d", idx)
+					sendToChannel(rctx, downloaded[idx], nil)
+					return nil
+				}
+				logrus.Infof("failed to download cached layer %d falling back to conversion : %s", idx, err)
+			}
+
+			if err := b.engine.DownloadLayer(rctx, idx); err != nil {
+				return err
+			}
+			logrus.Infof("downloaded layer %d", idx)
+			sendToChannel(rctx, downloaded[idx], nil)
+			return nil
+		}
+		for i := 0; i < b.layers; i++ {
+			download(i)
+		}
+		return nil
+	})
 	if err := g.Wait(); err != nil {
 		return v1.Descriptor{}, err
 	}
