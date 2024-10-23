@@ -262,8 +262,8 @@ func (e *turboOCIBuilderEngine) createIdentifier(idx int) error {
 }
 
 func (e *turboOCIBuilderEngine) create(ctx context.Context, dir string, mkfs bool) error {
-	vsizeGB := 64
-	if mkfs {
+	vsizeGB := 64 // use default baselayer
+	if e.mkfs {
 		vsizeGB = e.vsize
 	}
 	opts := []string{"-s", fmt.Sprintf("%d", vsizeGB), "--turboOCI"}
