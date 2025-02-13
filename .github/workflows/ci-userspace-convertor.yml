@@ -38,6 +38,15 @@ jobs:
           ref: ${{ inputs.commit-hash }}
           fetch-depth: 0
 
+      - name: check erofs
+        shell: bash
+        run: |
+          set -x
+          uname -a
+          modprobe erofs
+          lsmod | grep erofs
+          set +x
+
       - name: Start OverlayBD
         working-directory: /app
         shell: bash

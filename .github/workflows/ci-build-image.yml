@@ -51,6 +51,15 @@ jobs:
           releasever=${releasever#v}
           echo "RELEASE_VERSION=${releasever}" >> $GITHUB_ENV
 
+      - name: check erofs
+        shell: bash
+        run: |
+          set -x
+          uname -a
+          sudo modprobe erofs
+          lsmod | grep erofs
+          set +x
+
       - name: Build and Push
         uses: docker/build-push-action@v4
         with:
