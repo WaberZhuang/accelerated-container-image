@@ -544,6 +544,7 @@ func (o *snapshotter) constructOverlayBDSpec(ctx context.Context, key string, wr
 		}
 
 		configJSON.RepoBlobURL = blobPrefixURL
+		configJSON.ImageRef = ref
 		if isTurboOCI, dataDgst, compType := o.checkTurboOCI(info.Labels); isTurboOCI {
 			var fsmeta string
 
