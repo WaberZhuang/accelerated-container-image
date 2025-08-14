@@ -18,12 +18,14 @@ package types
 
 // OverlayBDBSConfig is the config of overlaybd target.
 type OverlayBDBSConfig struct {
+	ImageRef          string                   `json:"imageRef"`
 	RepoBlobURL       string                   `json:"repoBlobUrl"`
 	Lowers            []OverlayBDBSConfigLower `json:"lowers"`
 	Upper             OverlayBDBSConfigUpper   `json:"upper"`
 	ResultFile        string                   `json:"resultFile"`
 	AccelerationLayer bool                     `json:"accelerationLayer,omitempty"`
 	RecordTracePath   string                   `json:"recordTracePath,omitempty"`
+	PodSandboxMeta    PodSandboxMetadata       `json:"podSandboxMeta,omitempty"`
 }
 
 // OverlayBDBSConfigLower
@@ -42,4 +44,10 @@ type OverlayBDBSConfigUpper struct {
 	Data      string `json:"data,omitempty"`
 	Target    string `json:"target,omitempty"`
 	GzipIndex string `json:"gzipIndex,omitempty"`
+}
+
+type PodSandboxMetadata struct {
+	Name      string `json:"name,omitempty"`
+	Uid       string `json:"uid,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
 }

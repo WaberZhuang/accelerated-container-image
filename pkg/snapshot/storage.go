@@ -498,6 +498,19 @@ func (o *snapshotter) constructOverlayBDSpec(ctx context.Context, key string, wr
 		ResultFile: o.overlaybdInitDebuglogPath(id),
 	}
 
+	if writable {
+		// pod sandbox meta is only for rw layer
+		meta, ok := info.Labels["PodSandboxMetadata"]
+		if !ok {
+			log.G(ctx).Warn("no pod sandbox meta found")
+		} else {
+			if err := json.Unmarshal([]byte(meta), &configJSON.PodSandboxMeta); err != nil {
+				return fmt.Errorf("failed to unmarshal pod sandbox meta %q: %w", meta, err)
+			}
+			log.G(ctx).Infof("pod sandbox meta: %s", meta)
+		}
+	}
+
 	// load the parent's config and reuse the lowerdir
 	if info.Parent != "" {
 		parentID, _, _, err := storage.GetInfo(ctx, info.Parent)
@@ -511,6 +524,7 @@ func (o *snapshotter) constructOverlayBDSpec(ctx context.Context, key string, wr
 		}
 		configJSON.RepoBlobURL = parentConfJSON.RepoBlobURL
 		configJSON.Lowers = parentConfJSON.Lowers
+		configJSON.ImageRef = parentConfJSON.ImageRef
 	}
 
 	switch stype {
@@ -540,6 +554,7 @@ func (o *snapshotter) constructOverlayBDSpec(ctx context.Context, key string, wr
 		}
 
 		configJSON.RepoBlobURL = blobPrefixURL
+		configJSON.ImageRef = ref
 		if isTurboOCI, dataDgst, compType := o.checkTurboOCI(info.Labels); isTurboOCI {
 			var fsmeta string
 

@@ -33,6 +33,7 @@ jobs:
     - name: Build
       shell: bash
       run: |
+        set -x
         RELEASE_VERSION=${{ env.RELEASE_VERSION }}
         if [[ -z ${RELEASE_VERSION} ]]; then
           git fetch --tags
