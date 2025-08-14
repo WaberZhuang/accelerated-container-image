@@ -1544,6 +1544,10 @@ func (o *snapshotter) turboOCIFsMeta(id string) (string, string) {
 				log.L.Warn("erofs is not supported on this system, fallback to other fs type")
 				continue
 			}
+			if fsType == "erofs" && o.rwMode != RoDir {
+				log.L.Warn("erofs is read-only, it cannot be used as a writable rootfs, fallback to other fs type")
+				continue
+			}
 			return fsmeta, fsType
 		} else if !errors.Is(err, os.ErrNotExist) {
 			log.L.Errorf("error while checking fs meta file: %s", err)
