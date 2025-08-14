@@ -33,6 +33,7 @@ jobs:
     - name: Build
       shell: bash
       run: |
+        set -x
         RELEASE_VERSION=${{ env.RELEASE_VERSION }}
         if [[ -z ${RELEASE_VERSION} ]]; then
           git fetch --tags
@@ -45,7 +46,7 @@ jobs:
           minor_version=${version_parts[1]}
           patch_version=${version_parts[2]}
 
-          ((patch_version++))
+          patch_version=$((patch_version+1))
 
           new_version="$major_version.$minor_version.$patch_version"
           RELEASE_VERSION="${new_version}rc" #1.1.4rc
