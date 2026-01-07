@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -50,7 +51,7 @@ import (
 )
 
 const (
-	maxAttachAttempts = 50
+	maxAttachAttempts = 500
 
 	// hba number used to create tcmu devices in configfs
 	// all overlaybd devices are configured in /sys/kernel/config/target/core/user_999999999/
@@ -478,6 +479,35 @@ func (o *snapshotter) attachAndMountBlockDevice(ctx context.Context, snID string
 			return nil
 		}
 	}
+	return attachRetryError{lastErr}
+}
+
+type attachRetryError struct {
+	err error
+}
+
+func (e attachRetryError) Error() string {
+	return e.err.Error()
+}
+
+func (o *snapshotter) attachWithRetry(ctx context.Context, snID string, writable string, fsType string, mkfs bool) error {
+	maxRetry := 5
+	var lastErr error
+	for retry := 0; retry < maxRetry; retry++ {
+		lastErr = o.attachAndMountBlockDevice(ctx, snID, writable, fsType, mkfs)
+		if errors.As(lastErr, &attachRetryError{}) {
+			log.G(ctx).Warnf("attach failed, retrying(%d/%d)... snID: %s, err: %v", retry+1, maxRetry, snID, lastErr)
+			time.Sleep(1 * time.Second) // Wait for 1 second before retrying
+			continue
+		} else if lastErr != nil {
+			log.G(ctx).Errorf("attach failed, snID: %s, err: %v", snID, lastErr)
+			return lastErr
+		} else {
+			log.G(ctx).Infof("attach success, snID: %s", snID)
+			return nil
+		}
+	}
+	log.G(ctx).Errorf("attach failed, max retry reached")
 	return lastErr
 }
 

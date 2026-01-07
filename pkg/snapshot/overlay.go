@@ -613,7 +613,7 @@ func (o *snapshotter) createMountPoint(ctx context.Context, kind snapshots.Kind,
 			}
 			log.G(ctx).Debugf("attachAndMountBlockDevice (obdID: %s, writeType: %s, fsType %s, targetPath: %s)",
 				obdID, writeType, fsType, o.overlaybdTargetPath(obdID))
-			if err = o.attachAndMountBlockDevice(ctx, obdID, writeType, fsType, parent == ""); err != nil {
+			if err = o.attachWithRetry(ctx, obdID, writeType, fsType, parent == ""); err != nil {
 				log.G(ctx).Errorf("%v", err)
 				return nil, fmt.Errorf("failed to attach and mount for snapshot %v: %w", obdID, err)
 			}
@@ -773,7 +773,7 @@ func (o *snapshotter) Mounts(ctx context.Context, key string) (_ []mount.Mount, 
 					fsType = o.defaultFsType
 				}
 			}
-			if err := o.attachAndMountBlockDevice(ctx, parentID, RoDir, fsType, false); err != nil {
+			if err := o.attachWithRetry(ctx, parentID, RoDir, fsType, false); err != nil {
 				return nil, fmt.Errorf("failed to attach and mount for snapshot %v: %w", key, err)
 			}
 			return o.basedOnBlockDeviceMount(ctx, s, RoDir)
