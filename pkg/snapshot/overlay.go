@@ -115,7 +115,7 @@ func DefaultBootConfig() *BootConfig {
 			Port:      9863,
 		},
 		MirrorRegistry:    nil,
-		WritableLayerType: "append",
+		WritableLayerType: "sparse",
 		DefaultFsType:     "ext4",
 		RootfsQuota:       "",
 		Tenant:            -1,
