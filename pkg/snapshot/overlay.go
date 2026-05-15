@@ -368,17 +368,8 @@ func (o *snapshotter) getWritableType(ctx context.Context, id string, info snaps
 	defer func() {
 		log.G(ctx).Infof("snapshot R/W label: %s", mode)
 	}()
-	// check image type (OCIv1 or overlaybd)
-	if id != "" {
-		if _, err := o.loadBackingStoreConfig(id); err != nil {
-			log.G(ctx).Debugf("[%s] is not an overlaybd image.", id)
-			return RoDir
-		}
-	} else {
-		log.G(ctx).Debugf("empty snID get. It should be an initial layer.")
-	}
-	// overlaybd
-	rwMode := func(m string) string {
+
+	parseMode := func(m string) string {
 		if m == "dir" {
 			return RwDir
 		}
@@ -387,12 +378,28 @@ func (o *snapshotter) getWritableType(ctx context.Context, id string, info snaps
 		}
 		return RoDir
 	}
-	m, ok := info.Labels[label.SupportReadWriteMode]
-	if !ok {
-		return rwMode(o.rwMode)
-	}
 
-	return rwMode(m)
+	// check image type (OCIv1 or overlaybd)
+	if id != "" {
+		// is OCIv1
+		if _, err := o.loadBackingStoreConfig(id); err != nil {
+			log.G(ctx).Debugf("[%s] is not an overlaybd image.", id)
+			return RoDir
+		}
+		// is overlaybd
+		if m, ok := info.Labels[label.SupportReadWriteMode]; ok {
+			return parseMode(m)
+		} else {
+			return parseMode(o.rwMode)
+		}
+	} else {
+		log.G(ctx).Debugf("empty snID get. It should be an initial layer.")
+		if m, ok := info.Labels[label.SupportReadWriteMode]; ok {
+			return parseMode(m)
+		} else {
+			return RoDir
+		}
+	}
 }
 
 func (o *snapshotter) checkTurboOCI(labels map[string]string) (bool, string, string) {
